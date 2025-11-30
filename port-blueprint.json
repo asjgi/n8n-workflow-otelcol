@@ -1,0 +1,32 @@
+{
+  "identifier": "observability-request",
+  "title": "Add Service to Log Collection",
+  "icon": "Microservice",
+  "schema": {
+    "properties": {
+      "service_name": {
+        "title": "Service Name",
+        "type": "string",
+        "pattern": "^[a-z0-9-]+$",
+        "description": "The name of your service (must match your Kubernetes deployment name)"
+      },
+      "namespace": {
+        "title": "Kubernetes Namespace",
+        "type": "string",
+        "enum": ["production", "staging", "development"],
+        "default": "development",
+        "description": "Kubernetes namespace where your service is deployed"
+      }
+    },
+    "required": ["service_name", "namespace"]
+  },
+  "calculationProperties": {},
+  "relations": {
+    "service": {
+      "title": "Related Service",
+      "target": "service",
+      "many": false,
+      "required": false
+    }
+  }
+}

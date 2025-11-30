@@ -1,0 +1,120 @@
+# Example OTEL Collector Configuration that would be in the ConfigMap
+# This shows what the automation system will modify
+
+receivers:
+  # Global receivers
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+  # Service-specific receivers (added by automation)
+  filelog/user-api:
+    include:
+      - /var/log/pods/production_user-api_*/*/*.log
+    exclude:
+      - /var/log/pods/production_user-api_*/*/*previous*.log
+    start_at: end
+    include_file_path: true
+    include_file_name: false
+    operators:
+      - type: router
+        routes:
+          - output: json_parser
+            expr: 'body matches "^\\{"'
+          - output: regex_parser
+            expr: 'body matches "^\\d{4}-\\d{2}-\\d{2}"'
+      - type: json_parser
+        id: json_parser
+        parse_from: body
+        parse_to: attributes.parsed_fields
+      - type: regex_parser
+        id: regex_parser
+        regex: '^(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[.\d]*Z?) (?P<level>\w+) (?P<message>.*)'
+        parse_from: body
+        parse_to: attributes.parsed_fields
+      - type: move
+        from: attributes.parsed_fields.level
+        to: attributes.log_level
+      - type: move
+        from: attributes.parsed_fields.timestamp
+        to: timestamp
+      - type: timestamp_parser
+        parse_from: timestamp
+        layout: '2006-01-02T15:04:05.000Z'
+        if: 'timestamp != nil'
+
+processors:
+  # Global processors
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+    send_batch_max_size: 2048
+
+  memory_limiter:
+    limit_mib: 512
+    spike_limit_mib: 128
+    check_interval: 5s
+
+  # Service-specific processors (added by automation)
+  resource/user-api:
+    attributes:
+      - key: service.name
+        value: user-api
+        action: upsert
+      - key: service.namespace
+        value: production
+        action: upsert
+      - key: team
+        value: backend
+        action: upsert
+      - key: cluster
+        value: "${CLUSTER_NAME}"
+        action: upsert
+      - key: environment
+        value: prod
+        action: upsert
+
+exporters:
+  # Global exporters
+  logging:
+    loglevel: info
+
+  # Service-specific exporters (added by automation)
+  loki/user-api:
+    endpoint: "${LOKI_ENDPOINT}"
+    tenant_id: "backend"
+    labels:
+      attributes:
+        service_name: service.name
+        namespace: service.namespace
+        team: team
+        level: log_level
+        cluster: cluster
+        environment: environment
+    format: json
+    default_labels_enabled:
+      level: true
+      job: true
+      instance: true
+
+service:
+  pipelines:
+    # Global pipelines
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [logging]
+
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [logging]
+
+    # Service-specific pipelines (added by automation)
+    logs/user-api:
+      receivers: [filelog/user-api]
+      processors: [resource/user-api, batch]
+      exporters: [loki/user-api]

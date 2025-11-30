@@ -1,0 +1,253 @@
+{
+  "name": "OTEL Pipeline Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "otel-automation",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Port Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [200, 300],
+      "webhookId": "otel-automation"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.action}}",
+              "operation": "equal",
+              "value2": "create_observability"
+            }
+          ]
+        }
+      },
+      "id": "validate-action",
+      "name": "Validate Action",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [400, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://otel-pipeline-automation:8080/api/v1/otel/pipeline/add",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": []
+        },
+        "jsonParameters": true,
+        "bodyParametersJson": "={{ $json.request }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "apply-otel-config",
+      "name": "Apply OTEL Config",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [600, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://api.getport.io/v1/actions/runs/{{$node['Port Webhook'].json.request_id}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{$credentials.portApiToken}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": []
+        },
+        "jsonParameters": true,
+        "bodyParametersJson": "={\n  \"status\": \"SUCCESS\",\n  \"message\": {\n    \"run_status\": \"OpenTelemetry Collector deployed successfully for service {{$node['Port Webhook'].json.request.service_name}}\"\n  }\n}",
+        "options": {}
+      },
+      "id": "update-port-success",
+      "name": "Update Port Success",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [800, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://api.getport.io/v1/actions/runs/{{$node['Port Webhook'].json.request_id}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{$credentials.portApiToken}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": []
+        },
+        "jsonParameters": true,
+        "bodyParametersJson": "={\n  \"status\": \"FAILURE\",\n  \"message\": {\n    \"run_status\": \"Failed to deploy OpenTelemetry Collector: {{$node['Apply OTEL Config'].json.error}}\"\n  }\n}",
+        "options": {}
+      },
+      "id": "update-port-failure",
+      "name": "Update Port Failure",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [800, 400]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"accepted\",\n  \"request_id\": \"{{$node['Port Webhook'].json.request_id}}\",\n  \"message\": \"Processing observability request for {{$node['Port Webhook'].json.request.service_name}}\"\n}"
+      },
+      "id": "webhook-response",
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1000, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.getport.io/v1/actions/runs/{{$node['Port Webhook'].json.request_id}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{$credentials.portApiToken}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": []
+        },
+        "jsonParameters": true,
+        "bodyParametersJson": "={\n  \"status\": \"FAILURE\",\n  \"message\": {\n    \"run_status\": \"Invalid action type: {{$node['Port Webhook'].json.action}}\"\n  }\n}",
+        "options": {}
+      },
+      "id": "update-port-invalid",
+      "name": "Update Port Invalid",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [600, 400]
+    }
+  ],
+  "connections": {
+    "Port Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Action": {
+      "main": [
+        [
+          {
+            "node": "Apply OTEL Config",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update Port Invalid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply OTEL Config": {
+      "main": [
+        [
+          {
+            "node": "Update Port Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ],
+      "error": [
+        [
+          {
+            "node": "Update Port Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Port Success": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Port Failure": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Port Invalid": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {},
+  "versionId": "1"
+}

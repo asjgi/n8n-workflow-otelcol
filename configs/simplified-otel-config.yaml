@@ -1,0 +1,115 @@
+# Simplified OTEL Collector Configuration
+# This shows how the automation adds only receivers to existing pipeline
+
+receivers:
+  # Global receivers (already configured)
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+  # Service-specific receivers (added by automation)
+  filelog/user-api:
+    include:
+      - /var/log/pods/production_user-api_*/*/*.log
+    exclude:
+      - /var/log/pods/production_user-api_*/*/*previous*.log
+    start_at: end
+    include_file_path: true
+    include_file_name: false
+    operators:
+      - type: router
+        routes:
+          - output: json_parser
+            expr: 'body matches "^\\{"'
+          - output: regex_parser
+            expr: 'body matches "^\\d{4}-\\d{2}-\\d{2}"'
+      - type: json_parser
+        id: json_parser
+        parse_from: body
+        parse_to: attributes.parsed_fields
+      - type: regex_parser
+        id: regex_parser
+        regex: '^(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[.\d]*Z?) (?P<level>\w+) (?P<message>.*)'
+        parse_from: body
+        parse_to: attributes.parsed_fields
+      - type: move
+        from: attributes.parsed_fields.level
+        to: attributes.log_level
+
+  filelog/payment-service:
+    include:
+      - /var/log/pods/production_payment-service_*/*/*.log
+    exclude:
+      - /var/log/pods/production_payment-service_*/*/*previous*.log
+    start_at: end
+    include_file_path: true
+    include_file_name: false
+    operators:
+      - type: router
+        routes:
+          - output: json_parser
+            expr: 'body matches "^\\{"'
+          - output: regex_parser
+            expr: 'body matches "^\\d{4}-\\d{2}-\\d{2}"'
+      - type: json_parser
+        id: json_parser
+        parse_from: body
+        parse_to: attributes.parsed_fields
+      - type: regex_parser
+        id: regex_parser
+        regex: '^(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[.\d]*Z?) (?P<level>\w+) (?P<message>.*)'
+        parse_from: body
+        parse_to: attributes.parsed_fields
+      - type: move
+        from: attributes.parsed_fields.level
+        to: attributes.log_level
+
+processors:
+  # Global processors (already configured)
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+
+  memory_limiter:
+    limit_mib: 512
+
+  # Standard resource processor with automatic labeling
+  resource:
+    attributes:
+      - key: cluster
+        value: "${CLUSTER_NAME}"
+        action: upsert
+
+exporters:
+  # Global exporter (already configured)
+  loki:
+    endpoint: "${LOKI_ENDPOINT}"
+    labels:
+      attributes:
+        service_name: service.name
+        namespace: service.namespace
+        level: log_level
+        cluster: cluster
+    format: json
+
+service:
+  pipelines:
+    # Global pipelines (already configured)
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [loki]
+
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [loki]
+
+    # Main logs pipeline (automation adds new receivers here)
+    logs:
+      receivers: [otlp, filelog/user-api, filelog/payment-service]  # New receivers added here
+      processors: [resource, batch]
+      exporters: [loki]
