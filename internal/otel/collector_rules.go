@@ -206,20 +206,10 @@ func addToSection(config, sectionHeader, newContent string) string {
 	var result []string
 	found := false
 
-	for i, line := range lines {
+	for _, line := range lines {
 		result = append(result, line)
 		if strings.Contains(line, sectionHeader) && !found {
 			found = true
-			// 다음 섹션 찾기
-			nextSectionIndex := i + 1
-			for j := i + 1; j < len(lines); j++ {
-				if strings.HasPrefix(lines[j], "processors:") ||
-				   strings.HasPrefix(lines[j], "exporters:") ||
-				   strings.HasPrefix(lines[j], "service:") {
-					nextSectionIndex = j
-					break
-				}
-			}
 			// 새 내용 삽입
 			result = append(result, strings.Split(newContent, "\n")...)
 		}

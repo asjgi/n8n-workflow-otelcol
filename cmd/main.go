@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -11,6 +12,7 @@ import (
 
 	"otel-pipeline-automation/internal/handlers"
 	"otel-pipeline-automation/internal/k8s"
+	"otel-pipeline-automation/internal/otel"
 	"otel-pipeline-automation/pkg/models"
 
 	"github.com/gin-gonic/gin"

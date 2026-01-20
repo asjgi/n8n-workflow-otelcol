@@ -8,6 +8,48 @@ DevOps 자동화 시스템으로 개발팀이 Port IDP를 통해 요청하면 n8
 Port IDP → n8n Webhook → Go Service → ConfigMap 업데이트 → DaemonSet Reload → 서비스 로그 수집
 ```
 
+### 파이프라인 자동화 플로우
+
+```mermaid
+flowchart TB
+    subgraph Request["1. 요청"]
+        A[개발자] -->|셀프서비스 요청| B[Port IDP]
+        B -->|Webhook 트리거| C[n8n Workflow]
+    end
+
+    subgraph Automation["2. 자동화 처리"]
+        C -->|API 호출| D[Go Automation Service]
+        D -->|ConfigMap 업데이트| E[otel-collector-config]
+        D -->|Reload 트리거| F[OTEL Agent DaemonSet]
+    end
+
+    subgraph Collection["3. 로그 수집"]
+        F -->|filelog receiver| G["/var/log/pods/{ns}_{svc}_*/"]
+        G -->|OTLP| H[OTEL Gateway]
+        H -->|Push| I[Loki]
+    end
+
+    subgraph Result["4. 결과"]
+        D -->|상태 업데이트| C
+        C -->|결과 반영| B
+        I -->|쿼리| J[Grafana]
+    end
+
+    style A fill:#e1f5fe
+    style B fill:#fff3e0
+    style D fill:#e8f5e9
+    style H fill:#fce4ec
+    style I fill:#f3e5f5
+```
+
+### Gateway 모델 지원
+
+Agent-Gateway 구조를 지원합니다:
+- **Agent (DaemonSet)**: 각 노드에서 filelog receiver로 로그 수집 → OTLP로 Gateway에 전송
+- **Gateway (Deployment)**: OTLP receiver → processors → Loki exporter
+
+서비스 추가 시 Agent의 filelog include path만 추가하면 됩니다.
+
 ## 핵심 개념
 
 **기존 OTEL Collector DaemonSet 활용**: 새로운 Collector를 생성하지 않고, 기존 DaemonSet의 ConfigMap을 동적으로 업데이트합니다.
@@ -41,23 +83,40 @@ Port IDP → n8n Webhook → Go Service → ConfigMap 업데이트 → DaemonSet
 ## 빠른 시작
 
 ### 1. 빌드 및 배포
+
 ```bash
+# Docker 이미지 빌드
 make docker-build
+
+# Kubernetes 배포
 make deploy
 ```
 
-### 2. Port 설정
+### 2. Kind 클러스터에서 로컬 개발
+
+```bash
+# Kind 클러스터에 이미지 로드
+kind load docker-image otel-pipeline-automation:latest --name kind
+
+# 배포 (namespace 수정 필요시 deployments/kubernetes.yaml 편집)
+kubectl apply -f deployments/kubernetes.yaml
+
+# Pod 상태 확인
+kubectl get pods -n ns-logging -l app=otel-pipeline-automation
+```
+
+### 3. Port 설정
 1. `port-blueprint.json`을 사용해서 Blueprint 생성
 2. Action 생성하여 webhook URL 설정: `http://otel-pipeline-automation:8080/api/v1/webhook/port`
 
-### 3. n8n 설정
+### 4. n8n 설정
 1. `configs/n8n-workflow.json` 임포트
 2. Port API 토큰 Credential 설정
 
-### 4. 환경 변수 설정
+### 5. 환경 변수 설정
 ```bash
 # ConfigMap 수정
-kubectl edit configmap otel-config
+kubectl edit configmap otel-config -n ns-logging
 ```
 
 ## API 엔드포인트
@@ -70,13 +129,47 @@ kubectl edit configmap otel-config
 | GET | `/api/v1/otel/status/:service/:namespace` | OTEL DaemonSet 상태 조회 |
 | GET | `/api/v1/health` | 헬스 체크 |
 
+## 로컬 테스트 방법
+
+### 1. Port-forward 실행
+```bash
+kubectl port-forward -n ns-logging svc/otel-pipeline-automation 8080:8080
+```
+
+### 2. API 테스트 (다른 터미널에서)
+
+```bash
+# Health check
+curl http://localhost:8080/api/v1/health
+
+# 서비스 파이프라인 추가
+curl -X POST http://localhost:8080/api/v1/otel/pipeline/add \
+  -H "Content-Type: application/json" \
+  -d '{
+    "service_name": "my-service",
+    "namespace": "ns-test",
+    "team": "platform"
+  }'
+
+# 서비스 파이프라인 삭제
+curl -X DELETE http://localhost:8080/api/v1/otel/pipeline/my-service
+
+# OTEL Collector 상태 확인
+curl http://localhost:8080/api/v1/otel/status/my-service/observability
+```
+
 ## 사용 예시
 
 ### Port에서 요청
 ```json
 {
   "service_name": "user-api",
-  "namespace": "production"
+  "namespace": "production",
+  "team": "platform",
+  "custom_labels": {
+    "env": "prod",
+    "tier": "backend"
+  }
 }
 ```
 
@@ -103,10 +196,23 @@ make run
 make test
 ```
 
+### Docker 빌드
+```bash
+# 의존성 정리
+go mod tidy
+
+# Docker 이미지 빌드
+make docker-build
+
+# 이미지 확인
+docker images | grep otel-pipeline-automation
+```
+
 ## 요구사항
 
 - Go 1.21+
-- Kubernetes 클러스터
+- Docker
+- Kubernetes 클러스터 (또는 Kind)
 - **기존 OpenTelemetry Collector DaemonSet** (ConfigMap 기반 설정)
 - n8n
 - Port IDP
@@ -121,6 +227,27 @@ make test
 3. **기존 logs 파이프라인**: processor, exporter가 이미 구성됨
 4. **Loki**: 로그 집계 시스템 구축 완료 (tenant, 라벨링 설정 포함)
 5. **자동 라벨링**: processor가 파일 경로에서 service.name, service.namespace 추출하도록 설정됨
+
+## 프로젝트 구조
+
+```
+.
+├── cmd/
+│   └── main.go              # 애플리케이션 엔트리포인트
+├── configs/
+│   └── n8n-workflow.json    # n8n 워크플로우 설정
+├── deployments/
+│   └── kubernetes.yaml      # Kubernetes 배포 매니페스트
+├── internal/
+│   ├── handlers/            # HTTP 핸들러
+│   ├── k8s/                 # Kubernetes 클라이언트
+│   └── otel/                # OTEL 파이프라인 관리
+├── pkg/
+│   └── models/              # 데이터 모델
+├── Dockerfile
+├── Makefile
+└── README.md
+```
 
 ## 라이센스
 

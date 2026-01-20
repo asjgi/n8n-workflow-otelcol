@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"otel-pipeline-automation/pkg/models"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 // CollectorConfig generates OpenTelemetry Collector configuration
@@ -91,7 +91,7 @@ func (c *CollectorConfig) GenerateCollectorCRD(req *models.ObservabilityRequest)
 		},
 	}
 
-	collector.SetGroupVersionKind(metav1.GroupVersionKind{
+	collector.SetGroupVersionKind(schema.GroupVersionKind{
 		Group:   "opentelemetry.io",
 		Version: "v1beta1",
 		Kind:    "OpenTelemetryCollector",

@@ -123,7 +123,7 @@ func (pm *PipelineManager) addReceiverToConfig(config, receiver, serviceName str
 	receiversAdded := false
 	pipelineUpdated := false
 
-	for i, line := range lines {
+	for _, line := range lines {
 		result = append(result, line)
 
 		// Add to receivers section
@@ -157,7 +157,7 @@ func (pm *PipelineManager) removeReceiverFromConfig(config, serviceName string) 
 	var result []string
 	skipUntilNextSection := false
 
-	for i, line := range lines {
+	for _, line := range lines {
 		// Check if this is the service receiver
 		if strings.Contains(line, fmt.Sprintf("filelog/%s:", serviceName)) {
 			skipUntilNextSection = true

@@ -3,7 +3,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: otel-pipeline-automation
-  namespace: default
+  namespace: ns-logging
   labels:
     app: otel-pipeline-automation
     component: automation-service
@@ -21,6 +21,7 @@ spec:
       containers:
       - name: automation-service
         image: otel-pipeline-automation:latest
+        imagePullPolicy: Never
         ports:
         - containerPort: 8080
           name: http
@@ -70,7 +71,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: otel-pipeline-automation
-  namespace: default
+  namespace: ns-logging
   labels:
     app: otel-pipeline-automation
 spec:
@@ -88,7 +89,7 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: otel-automation-sa
-  namespace: default
+  namespace: ns-logging
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -118,14 +119,14 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: otel-automation-sa
-  namespace: default
+  namespace: ns-logging
 
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: otel-config
-  namespace: default
+  namespace: ns-logging
 data:
   loki-endpoint: "http://loki:3100/loki/api/v1/push"
   cluster-name: "production"

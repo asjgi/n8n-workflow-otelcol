@@ -2,8 +2,10 @@ package models
 
 // ObservabilityRequest represents the simplified request from Port IDP
 type ObservabilityRequest struct {
-	ServiceName string `json:"service_name" yaml:"service_name"`
-	Namespace   string `json:"namespace" yaml:"namespace"`
+	ServiceName  string            `json:"service_name" yaml:"service_name"`
+	Namespace    string            `json:"namespace" yaml:"namespace"`
+	Team         string            `json:"team" yaml:"team"`
+	CustomLabels map[string]string `json:"custom_labels,omitempty" yaml:"custom_labels,omitempty"`
 }
 
 // PortWebhook represents the webhook payload from Port
