@@ -32,12 +32,11 @@ func main() {
 		log.Fatalf("Failed to initialize Kubernetes client: %v", err)
 	}
 
-	// Initialize Pipeline manager for existing OTEL Collector DaemonSet
-	configMapName := getEnv("OTEL_CONFIG_MAP_NAME", "otel-collector-config")
-	configMapNamespace := getEnv("OTEL_CONFIG_MAP_NAMESPACE", "observability")
-	collectorNamespace := getEnv("OTEL_COLLECTOR_NAMESPACE", "observability")
+	// Initialize Pipeline manager for existing OTEL Collector CR
+	collectorName := getEnv("OTEL_COLLECTOR_NAME", "my-collector")
+	collectorNamespace := getEnv("OTEL_COLLECTOR_NAMESPACE", "ns-apigw")
 
-	pipelineManager := otel.NewPipelineManager(k8sClient.GetClientset(), configMapName, configMapNamespace, collectorNamespace)
+	pipelineManager := otel.NewPipelineManager(k8sClient.GetDynamicClient(), collectorName, collectorNamespace)
 
 	// Initialize handlers
 	webhookHandler := &handlers.WebhookHandler{
@@ -59,7 +58,7 @@ func main() {
 		v1.GET("/health", webhookHandler.HealthCheck)
 		v1.POST("/otel/pipeline/add", handleAddPipeline(pipelineManager))
 		v1.DELETE("/otel/pipeline/:service", handleRemovePipeline(pipelineManager))
-		v1.GET("/otel/status/:service/:namespace", handleOtelStatus(k8sClient))
+		v1.GET("/otel/status/:service", handleOtelStatus(pipelineManager))
 	}
 
 	// Setup HTTP server
@@ -103,13 +102,9 @@ func handleAddPipeline(pipelineManager *otel.PipelineManager) gin.HandlerFunc {
 
 		ctx := context.Background()
 		if err := pipelineManager.AddServicePipeline(ctx, &req); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":   "Failed to add service pipeline",
-				"details": err.Error(),
-			})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add service pipeline"})
 			return
 		}
-
 		c.JSON(http.StatusOK, gin.H{
 			"status":    "success",
 			"message":   "Service receiver added to OTEL Collector pipeline",
@@ -121,26 +116,25 @@ func handleAddPipeline(pipelineManager *otel.PipelineManager) gin.HandlerFunc {
 	}
 }
 
-func handleOtelStatus(k8sClient *k8s.Client) gin.HandlerFunc {
+func handleOtelStatus(pipelineManager *otel.PipelineManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		serviceName := c.Param("service")
-		namespace := c.Param("namespace")
 
 		ctx := context.Background()
-		status, err := k8sClient.GetDaemonSetStatus(ctx, "otel-collector", namespace)
+		status, err := pipelineManager.GetCollectorStatus(ctx)
 		if err != nil {
 			c.JSON(http.StatusNotFound, gin.H{
-				"error":   "OTEL Collector DaemonSet not found",
+				"error":   "OpenTelemetryCollector CR not found",
 				"details": err.Error(),
 			})
 			return
 		}
 
 		c.JSON(http.StatusOK, gin.H{
-			"status":     "success",
-			"service":    serviceName,
-			"daemonset":  status,
-			"message":    "OTEL Collector DaemonSet status retrieved",
+			"status":    "success",
+			"service":   serviceName,
+			"collector": status,
+			"message":   "OpenTelemetryCollector CR status retrieved",
 		})
 	}
 }

@@ -52,6 +52,11 @@ func (c *Client) GetClientset() kubernetes.Interface {
 	return c.clientset
 }
 
+// GetDynamicClient returns the dynamic client for CR operations
+func (c *Client) GetDynamicClient() dynamic.Interface {
+	return c.dynamicClient
+}
+
 // GetDaemonSetStatus returns the status of the OTEL Collector DaemonSet
 func (c *Client) GetDaemonSetStatus(ctx context.Context, name, namespace string) (interface{}, error) {
 	daemonSet, err := c.clientset.AppsV1().DaemonSets(namespace).Get(ctx, name, metav1.GetOptions{})
