@@ -166,7 +166,7 @@ func (pm *PipelineManager) generateServiceReceiverMap(req *models.ObservabilityR
 			},
 			map[string]interface{}{
 				"type":       "json_parser",
-				"if":         `body matches "^\\\{.*\\\}$"`,
+				"if":         `body matches "^\\{.*\\}$"`,
 				"parse_from": "body",
 				"parse_to":   `attributes["tmp"]`,
 			},

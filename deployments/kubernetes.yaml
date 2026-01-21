@@ -43,9 +43,11 @@ spec:
         - name: OTEL_CONFIG_MAP_NAME
           value: "otel-collector-config"
         - name: OTEL_CONFIG_MAP_NAMESPACE
-          value: "observability"
+          value: "ns-apigw"
         - name: OTEL_COLLECTOR_NAMESPACE
-          value: "observability"
+          value: "ns-apigw"
+        - name: OTEL_COLLECTOR_NAME
+          value: "my-collector"
         resources:
           requests:
             memory: "64Mi"
@@ -106,6 +108,9 @@ rules:
 - apiGroups: [""]
   resources: ["pods"]
   verbs: ["get", "list", "watch"]
+- apiGroups: ["opentelemetry.io"]
+  resources: ["opentelemetrycollectors"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 
 
 ---
