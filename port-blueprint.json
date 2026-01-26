@@ -16,11 +16,17 @@
         "pattern": "^ns-[a-z0-9-]+$",
         "description": "Kubernetes namespace where your service is deployed (e.g., ns-auth, ns-connect, ns-home)"
       },
-      "cluster": {
-        "title": "Cluster Environment",
+      "region": {
+        "title": "Region",
+        "type": "string",
+        "enum": ["kic", "aic", "eic"],
+        "description": "Target region: kic (Korea), aic (America), eic (Europe)"
+      },
+      "phase": {
+        "title": "Phase",
         "type": "string",
         "enum": ["st", "qa", "op"],
-        "description": "The target cluster environment: st (staging), qa (quality assurance), op (operations/production)"
+        "description": "Deployment phase: st (staging), qa (quality assurance), op (production)"
       },
       "pipeline_type": {
         "title": "Pipeline Type",
@@ -30,7 +36,7 @@
         "description": "The OTEL pipeline type for log processing"
       }
     },
-    "required": ["service_name", "namespace", "cluster"]
+    "required": ["service_name", "namespace", "region", "phase"]
   },
   "calculationProperties": {},
   "relations": {
