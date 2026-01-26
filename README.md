@@ -1,11 +1,11 @@
 # OTEL Pipeline Automation
 
-DevOps 자동화 시스템으로 개발팀이 Port IDP를 통해 요청하면 n8n 워크플로우를 거쳐 기존 OpenTelemetry Collector DaemonSet에 새로운 서비스 파이프라인을 자동으로 추가합니다.
+Port IDP를 통해 개발팀이 셀프서비스로 로그 수집을 요청하면, n8n 워크플로우가 Gitea에서 OTEL Collector 설정을 자동으로 업데이트합니다.
 
 ## 아키텍처
 
 ```
-Port IDP → n8n Webhook → Go Service → ConfigMap 업데이트 → DaemonSet Reload → 서비스 로그 수집
+Port IDP → n8n Webhook → Gitea GitOps → ArgoCD Sync → OTEL Collector 업데이트
 ```
 
 ### 파이프라인 자동화 플로우
@@ -18,236 +18,198 @@ flowchart TB
     end
 
     subgraph Automation["2. 자동화 처리"]
-        C -->|API 호출| D[Go Automation Service]
-        D -->|ConfigMap 업데이트| E[otel-collector-config]
-        D -->|Reload 트리거| F[OTEL Agent DaemonSet]
+        C -->|Gitea API| D[YAML 설정 수정]
+        D -->|ST| E1[Direct Commit]
+        D -->|QA/OP| E2[PR 생성]
     end
 
-    subgraph Collection["3. 로그 수집"]
-        F -->|filelog receiver| G["/var/log/pods/{ns}_{svc}_*/"]
-        G -->|OTLP| H[OTEL Gateway]
-        H -->|Push| I[Loki]
+    subgraph GitOps["3. GitOps 배포"]
+        E1 --> F[ArgoCD Sync]
+        E2 -->|Review & Merge| F
+        F --> G[OTEL Collector 업데이트]
     end
 
-    subgraph Result["4. 결과"]
-        D -->|상태 업데이트| C
-        C -->|결과 반영| B
+    subgraph Collection["4. 로그 수집"]
+        G -->|filelog receiver| H["/var/log/pods/{ns}_{svc}_*/"]
+        H -->|OTLP| I[Loki]
+    end
+
+    subgraph Result["5. 결과"]
+        C -->|상태 업데이트| B
         I -->|쿼리| J[Grafana]
     end
 
     style A fill:#e1f5fe
     style B fill:#fff3e0
-    style D fill:#e8f5e9
-    style H fill:#fce4ec
+    style C fill:#e8f5e9
+    style F fill:#fce4ec
     style I fill:#f3e5f5
 ```
 
-### Gateway 모델 지원
+## 환경별 배포 전략
 
-Agent-Gateway 구조를 지원합니다:
-- **Agent (DaemonSet)**: 각 노드에서 filelog receiver로 로그 수집 → OTLP로 Gateway에 전송
-- **Gateway (Deployment)**: OTLP receiver → processors → Loki exporter
-
-서비스 추가 시 Agent의 filelog include path만 추가하면 됩니다.
-
-## 핵심 개념
-
-**기존 OTEL Collector DaemonSet 활용**: 새로운 Collector를 생성하지 않고, 기존 DaemonSet의 ConfigMap을 동적으로 업데이트합니다.
-
-**Receiver 중심 접근**: 서비스별로 `filelog/{service-name}` receiver만 추가하고, 기존 파이프라인의 receivers 배열에 연결합니다.
-
-**기존 인프라 활용**: 이미 구축된 processor, exporter, tenant 설정을 그대로 사용합니다.
+| 환경 | 클러스터 | 배포 방식 |
+|------|---------|----------|
+| ST (Staging) | `st`, `*-st` | Direct Commit → 자동 배포 |
+| QA | `qa`, `*-qa` | PR 생성 → 리뷰 후 Merge |
+| OP (Production) | `op`, `*-op` | PR 생성 → 리뷰 후 Merge |
 
 ## 구성요소
 
-### 1. Port IDP Blueprint
-- 개발팀이 셀프서비스로 로그 수집 요청
-- **최소 입력**: 서비스명, 네임스페이스만 입력
-- 승인 워크플로우 지원
+### 1. Port IDP Blueprint (`port-blueprint.json`)
 
-### 2. n8n 워크플로우
-- Port webhook 수신 및 검증
-- 자동화 파이프라인 실행
-- Port에 결과 상태 업데이트
+개발팀이 셀프서비스로 로그 수집 요청:
 
-### 3. Go Automation Service
-- 서비스별 `filelog` receiver 생성
-- 기존 logs 파이프라인에 receiver 추가
-- ConfigMap 업데이트 및 DaemonSet 리로드
+| 필드 | 설명 | 예시 |
+|------|------|------|
+| `service_name` | 서비스명 (K8s deployment 이름) | `user-api` |
+| `namespace` | K8s 네임스페이스 | `st`, `qa`, `op` |
+| `cluster` | 클러스터 환경 | `st`, `qa`, `op` |
+| `pipeline_type` | OTEL 파이프라인 타입 | `standard`, `cloudlet`, `apigw` 등 |
 
-### 4. 자동 생성되는 구성요소
-- **Receiver**: `filelog/{service-name}` - `/var/log/pods/{namespace}_{service-name}_*/` 경로 수집
-- **Pipeline 연결**: 기존 logs 파이프라인의 receivers 배열에 추가
-- **자동 라벨링**: 기존 processor가 service.name, service.namespace 자동 추출
+### 2. n8n 워크플로우 (`configs/n8n-workflow-gitea-simple.json`)
 
-## 빠른 시작
+#### 워크플로우 노드 구성
 
-### 1. 빌드 및 배포
-
-```bash
-# Docker 이미지 빌드
-make docker-build
-
-# Kubernetes 배포
-make deploy
+```
+Webhook Trigger → Validate Action → Gitea Read File → Modify YAML → Requires PR?
+                        ↓                                              ↓         ↓
+                Port Invalid Action                           Create Branch   Direct Commit
+                                                                    ↓              ↓
+                                                              Create PR     Port Success (ST)
+                                                                    ↓
+                                                           Port Success (QA/OP)
 ```
 
-### 2. Kind 클러스터에서 로컬 개발
+#### 주요 노드 설명
 
-```bash
-# Kind 클러스터에 이미지 로드
-kind load docker-image otel-pipeline-automation:latest --name kind
+| 노드 | 역할 |
+|------|------|
+| **Webhook Trigger** | Port IDP webhook 수신 (`POST /webhook/otel-pipeline-port`) |
+| **Validate Action** | `action.identifier === "create_observability"` 검증 |
+| **Gitea Read File** | `{cluster}/agent-node-log.yaml` 파일 읽기 |
+| **Modify YAML** | `filelog/{pipeline_type}` 섹션에 로그 경로 추가 |
+| **Requires PR?** | QA/OP면 PR 생성, ST면 직접 커밋 |
+| **Port Success** | Port에 성공 상태 콜백 |
 
-# 배포 (namespace 수정 필요시 deployments/kubernetes.yaml 편집)
-kubectl apply -f deployments/kubernetes.yaml
+#### 노드별 상세 설명
 
-# Pod 상태 확인
-kubectl get pods -n ns-logging -l app=otel-pipeline-automation
-```
-
-### 3. Port 설정
-1. `port-blueprint.json`을 사용해서 Blueprint 생성
-2. Action 생성하여 webhook URL 설정: `http://otel-pipeline-automation:8080/api/v1/webhook/port`
-
-### 4. n8n 설정
-1. `configs/n8n-workflow.json` 임포트
-2. Port API 토큰 Credential 설정
-
-### 5. 환경 변수 설정
-```bash
-# ConfigMap 수정
-kubectl edit configmap otel-config -n ns-logging
-```
-
-## API 엔드포인트
-
-| Method | Path | 설명 |
-|--------|------|------|
-| POST | `/api/v1/webhook/port` | Port webhook 수신 |
-| POST | `/api/v1/otel/pipeline/add` | 서비스 파이프라인 추가 |
-| DELETE | `/api/v1/otel/pipeline/:service` | 서비스 파이프라인 제거 |
-| GET | `/api/v1/otel/status/:service/:namespace` | OTEL DaemonSet 상태 조회 |
-| GET | `/api/v1/health` | 헬스 체크 |
-
-## 로컬 테스트 방법
-
-### 1. Port-forward 실행
-```bash
-kubectl port-forward -n ns-logging svc/otel-pipeline-automation 8080:8080
-```
-
-### 2. API 테스트 (다른 터미널에서)
-
-```bash
-# Health check
-curl http://localhost:8080/api/v1/health
-
-# 서비스 파이프라인 추가
-curl -X POST http://localhost:8080/api/v1/otel/pipeline/add \
-  -H "Content-Type: application/json" \
-  -d '{
-    "service_name": "my-service",
-    "namespace": "ns-test",
-    "team": "platform"
-  }'
-
-# 서비스 파이프라인 삭제
-curl -X DELETE http://localhost:8080/api/v1/otel/pipeline/my-service
-
-# OTEL Collector 상태 확인
-curl http://localhost:8080/api/v1/otel/status/my-service/observability
-```
-
-## 사용 예시
-
-### Port에서 요청
+**1. Webhook Trigger**
+- Port IDP에서 webhook 요청 수신
+- 입력 페이로드:
 ```json
 {
-  "service_name": "user-api",
-  "namespace": "production",
-  "team": "platform",
-  "custom_labels": {
-    "env": "prod",
-    "tier": "backend"
-  }
+  "context": { "runId": "run-123" },
+  "payload": {
+    "properties": {
+      "service_name": "my-service",
+      "namespace": "st",
+      "cluster": "cluster-st",
+      "pipeline_type": "standard"
+    }
+  },
+  "action": { "identifier": "create_observability" }
 }
 ```
 
-### 자동 생성되는 구성
-- **Receiver**: `filelog/user-api` - `/var/log/pods/production_user-api_*/` 경로 수집
-- **Pipeline 추가**: 기존 `logs` 파이프라인에 `filelog/user-api` 추가
-- **자동 라벨링**: 기존 processor가 파일 경로에서 service.name, service.namespace 자동 추출
-- **자동 로그 파싱**: JSON/일반 텍스트 로그 모두 지원
-- **기존 설정 활용**: tenant, exporter, 필터링 등 기존 설정 그대로 사용
+**2. Validate Action**
+- Port 액션 유효성 검증
+- 조건: `action.identifier === "create_observability"`
+- 실패 시 Port Invalid Action으로 에러 콜백
 
-## 개발
+**3. Gitea Read File**
+- Gitea API로 현재 OTEL 설정 파일 읽기
+- API: `GET /repos/cluster/otel-settings/contents/{cluster}/agent-node-log.yaml`
 
-### 로컬 실행
-```bash
-export N8N_WEBHOOK_URL="http://localhost:5678/webhook/otel-automation"
-export LOKI_ENDPOINT="http://localhost:3100/loki/api/v1/push"
-export CLUSTER_NAME="local"
+**4. Modify YAML**
+- YAML에 새 서비스 로그 경로 추가
+- 중복 체크 (이미 있으면 에러)
+- 로그 경로 형식: `/var/log/pods/{namespace}_{service_name}*/{service_name}*/*.log`
 
-make run
+**5. Requires PR?**
+- 환경별 분기 처리
+- ST: Direct Commit → main 브랜치에 직접 커밋
+- QA/OP: PR 생성 → 피처 브랜치 생성 후 PR
+
+**6. Port Success**
+- Port API로 성공 상태 콜백
+- ST: "Log collection configured. ArgoCD will sync automatically."
+- QA/OP: "PR created. Awaiting review." + PR URL
+
+### 3. Gitea 저장소 구조
+
+```
+otel-settings/
+├── st/
+│   └── agent-node-log.yaml
+├── qa/
+│   └── agent-node-log.yaml
+└── op/
+    └── agent-node-log.yaml
 ```
 
-### 테스트
-```bash
-make test
+## 빠른 시작
+
+### 1. n8n 워크플로우 임포트
+
+1. n8n에서 `configs/n8n-workflow-gitea-simple.json` 임포트
+2. Credentials 설정:
+   - **Gitea Token**: HTTP Header Auth (`Authorization: token {YOUR_TOKEN}`)
+   - **Port Token**: HTTP Header Auth (`Authorization: Bearer {YOUR_TOKEN}`)
+
+### 2. Port Blueprint 생성
+
+1. Port에서 `port-blueprint.json`으로 Blueprint 생성
+2. Action 생성:
+   - **Identifier**: `create_observability`
+   - **Webhook URL**: `https://your-n8n.com/webhook/otel-pipeline-port`
+
+### 3. 테스트
+
+Port에서 "Add Service to Log Collection" 액션 실행:
+
+```json
+{
+  "service_name": "my-service",
+  "namespace": "ns-myapp",
+  "cluster": "st",
+  "pipeline_type": "standard"
+}
 ```
 
-### Docker 빌드
-```bash
-# 의존성 정리
-go mod tidy
+## 자동 생성되는 구성
 
-# Docker 이미지 빌드
-make docker-build
+요청 시 `agent-node-log.yaml`에 다음 경로가 추가됩니다:
 
-# 이미지 확인
-docker images | grep otel-pipeline-automation
+```yaml
+receivers:
+  filelog/standard:
+    include:
+      - /var/log/pods/ns-myapp_my-service*/my-service*/*.log  # 자동 추가
 ```
-
-## 요구사항
-
-- Go 1.21+
-- Docker
-- Kubernetes 클러스터 (또는 Kind)
-- **기존 OpenTelemetry Collector DaemonSet** (ConfigMap 기반 설정)
-- n8n
-- Port IDP
-- Loki (이미 구축됨)
-
-## 전제 조건
-
-기존 환경에 다음이 이미 구축되어 있어야 합니다:
-
-1. **OTEL Collector DaemonSet**: `observability` 네임스페이스에 `otel-collector` 이름으로 실행 중
-2. **ConfigMap**: `otel-collector-config` 이름으로 OTEL 설정 관리
-3. **기존 logs 파이프라인**: processor, exporter가 이미 구성됨
-4. **Loki**: 로그 집계 시스템 구축 완료 (tenant, 라벨링 설정 포함)
-5. **자동 라벨링**: processor가 파일 경로에서 service.name, service.namespace 추출하도록 설정됨
 
 ## 프로젝트 구조
 
 ```
 .
-├── cmd/
-│   └── main.go              # 애플리케이션 엔트리포인트
 ├── configs/
-│   └── n8n-workflow.json    # n8n 워크플로우 설정
-├── deployments/
-│   └── kubernetes.yaml      # Kubernetes 배포 매니페스트
-├── internal/
-│   ├── handlers/            # HTTP 핸들러
-│   ├── k8s/                 # Kubernetes 클라이언트
-│   └── otel/                # OTEL 파이프라인 관리
-├── pkg/
-│   └── models/              # 데이터 모델
-├── Dockerfile
-├── Makefile
+│   ├── n8n-workflow-gitea-simple.json  # n8n 워크플로우
+│   ├── example-otel-config.yaml        # OTEL 설정 예시
+│   └── *.yaml                          # 기타 설정 참조
+├── port-blueprint.json                 # Port Blueprint 정의
+├── demo/                               # 데모 스크립트
+├── scripts/                            # 유틸리티 스크립트
 └── README.md
 ```
+
+## 요구사항
+
+- n8n (워크플로우 실행)
+- Port IDP (셀프서비스 포털)
+- Gitea (설정 저장소)
+- ArgoCD (GitOps 배포)
+- OpenTelemetry Collector (로그 수집)
+- Loki (로그 저장)
 
 ## 라이센스
 

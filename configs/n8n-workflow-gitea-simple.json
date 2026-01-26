@@ -1,0 +1,421 @@
+{
+  "name": "OTEL Pipeline - Port Integration",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "otel-pipeline-port",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "webhookId": "otel-pipeline-port"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-action",
+              "leftValue": "={{ $json.action?.identifier }}",
+              "rightValue": "create_observability",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "validate-action",
+      "name": "Validate Action",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [470, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://gitea.lgthinq.com/api/v1/repos/cluster/otel-settings/contents/' + $json.payload.properties.cluster + '/agent-node-log.yaml' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "gitea-read-file",
+      "name": "Gitea Read File",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [690, 200],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gitea-token",
+          "name": "Gitea Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const portData = $('Webhook Trigger').first().json;\nconst props = portData.payload.properties;\nconst giteaFile = $('Gitea Read File').first().json;\n\nconst cluster = props.cluster;\nconst namespace = props.namespace;\nconst serviceName = props.service_name;\nconst pipelineType = props.pipeline_type || 'standard';\nconst runId = portData.context.runId;\n\nconst validPipelines = ['standard', 'standard-metadata', 'cloudlet', 'apigw', 'connect', 't20'];\nif (!validPipelines.includes(pipelineType)) {\n  throw new Error(`Invalid pipeline_type: ${pipelineType}. Valid: ${validPipelines.join(', ')}`);\n}\n\n// ST: Direct Commit, QA/OP: PR 생성
+const requiresPR = cluster === 'qa' || cluster === 'op' || cluster.endsWith('-qa') || cluster.endsWith('-op');\nconst newLogPath = `/var/log/pods/${namespace}_${serviceName}*/${serviceName}*/*.log`;\nconst yamlContent = Buffer.from(giteaFile.content, 'base64').toString('utf8');\n\nconst pipelineKey = `filelog/${pipelineType}:`;\nconst pipelineIndex = yamlContent.indexOf(pipelineKey);\nif (pipelineIndex !== -1) {\n  const nextPipelineIndex = yamlContent.indexOf('filelog/', pipelineIndex + pipelineKey.length);\n  const sectionEnd = nextPipelineIndex !== -1 ? nextPipelineIndex : yamlContent.length;\n  const pipelineSection = yamlContent.substring(pipelineIndex, sectionEnd);\n  \n  if (pipelineSection.includes(`${namespace}_${serviceName}`)) {\n    throw new Error(`Service ${serviceName} in ${namespace} already exists in filelog/${pipelineType}`);\n  }\n}\n\nconst lines = yamlContent.split('\\n');\nlet result = [];\nlet inTargetFilelog = false;\nlet foundInclude = false;\nlet insertIndent = '';\nconst targetFilelog = `filelog/${pipelineType}:`;\n\nfor (let i = 0; i < lines.length; i++) {\n  const line = lines[i];\n  \n  if (line.trim() === targetFilelog) {\n    inTargetFilelog = true;\n  }\n  \n  if (inTargetFilelog && line.match(/^\\s+filelog\\//) && line.trim() !== targetFilelog) {\n    inTargetFilelog = false;\n  }\n  \n  if (inTargetFilelog && !foundInclude && line.match(/^\\s+include:\\s*$/)) {\n    result.push(line);\n    if (i + 1 < lines.length) {\n      const nextLine = lines[i + 1];\n      const match = nextLine.match(/^(\\s+)-/);\n      if (match) {\n        insertIndent = match[1];\n        result.push(`${insertIndent}- ${newLogPath}`);\n        foundInclude = true;\n      }\n    }\n    continue;\n  }\n  \n  result.push(line);\n}\n\nif (!foundInclude) {\n  throw new Error(`Could not find filelog/${pipelineType} include section in ${cluster}`);\n}\n\nconst updatedYaml = result.join('\\n');\nconst timestamp = Date.now();\nconst branchName = `feat/otel-${serviceName}-${timestamp}`;\n\nreturn {\n  json: {\n    cluster,\n    namespace,\n    service_name: serviceName,\n    pipeline_type: pipelineType,\n    new_log_path: newLogPath,\n    file_sha: giteaFile.sha,\n    file_path: `${cluster}/agent-node-log.yaml`,\n    updated_content: Buffer.from(updatedYaml).toString('base64'),\n    requires_pr: requiresPR,\n    branch_name: branchName,\n    run_id: runId\n  }\n};"
+      },
+      "id": "code-modify-yaml",
+      "name": "Modify YAML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [910, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-requires-pr",
+              "leftValue": "={{ $json.requires_pr }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-production",
+      "name": "Requires PR?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1130, 200]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ 'http://gitea.lgthinq.com/api/v1/repos/cluster/otel-settings/contents/' + $json.file_path }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"message\": \"feat: Add log collection for {{ $json.service_name }} in {{ $json.namespace }} ({{ $json.pipeline_type }})\\n\\nCluster: {{ $json.cluster }}\\nPipeline: filelog/{{ $json.pipeline_type }}\\nAutomated by n8n\",\n  \"content\": \"{{ $json.updated_content }}\",\n  \"sha\": \"{{ $json.file_sha }}\",\n  \"branch\": \"main\"\n}",
+        "options": {}
+      },
+      "id": "gitea-commit-direct",
+      "name": "Direct Commit (ST)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1350, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gitea-token",
+          "name": "Gitea Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'https://api.getport.io/v1/actions/runs/' + $('Modify YAML').first().json.run_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"status\": \"SUCCESS\",\n  \"message\": {\n    \"run_status\": \"Log collection configured for {{ $('Modify YAML').first().json.service_name }} in {{ $('Modify YAML').first().json.namespace }}. ArgoCD will sync automatically.\"\n  }\n}",
+        "options": {}
+      },
+      "id": "port-success-stqa",
+      "name": "Port Success (ST)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1570, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "port-token",
+          "name": "Port Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://gitea.lgthinq.com/api/v1/repos/cluster/otel-settings/branches",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"new_branch_name\": \"{{ $json.branch_name }}\",\n  \"old_ref_name\": \"main\"\n}",
+        "options": {}
+      },
+      "id": "gitea-create-branch",
+      "name": "Create Branch (QA/OP)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1350, 100],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gitea-token",
+          "name": "Gitea Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://gitea.lgthinq.com/api/v1/repos/cluster/otel-settings/contents/' + $('Modify YAML').first().json.file_path + '?ref=' + $('Modify YAML').first().json.branch_name }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "gitea-get-branch-sha",
+      "name": "Get Branch SHA",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1570, 100],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gitea-token",
+          "name": "Gitea Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ 'http://gitea.lgthinq.com/api/v1/repos/cluster/otel-settings/contents/' + $('Modify YAML').first().json.file_path }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"message\": \"feat: Add log collection for {{ $('Modify YAML').first().json.service_name }} in {{ $('Modify YAML').first().json.namespace }} ({{ $('Modify YAML').first().json.pipeline_type }})\\n\\nCluster: {{ $('Modify YAML').first().json.cluster }}\\nPipeline: filelog/{{ $('Modify YAML').first().json.pipeline_type }}\\nAutomated by n8n\",\n  \"content\": \"{{ $('Modify YAML').first().json.updated_content }}\",\n  \"sha\": \"{{ $json.sha }}\",\n  \"branch\": \"{{ $('Modify YAML').first().json.branch_name }}\"\n}",
+        "options": {}
+      },
+      "id": "gitea-commit-branch",
+      "name": "Commit to Branch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1790, 100],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gitea-token",
+          "name": "Gitea Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://gitea.lgthinq.com/api/v1/repos/cluster/otel-settings/pulls",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"title\": \"[{{ $('Modify YAML').first().json.cluster }}] Add log collection for {{ $('Modify YAML').first().json.service_name }}\",\n  \"body\": \"## Summary\\n\\n- **Service**: {{ $('Modify YAML').first().json.service_name }}\\n- **Namespace**: {{ $('Modify YAML').first().json.namespace }}\\n- **Cluster**: {{ $('Modify YAML').first().json.cluster }}\\n- **Pipeline**: `filelog/{{ $('Modify YAML').first().json.pipeline_type }}`\\n- **Log Path**: `{{ $('Modify YAML').first().json.new_log_path }}`\\n\\n## Automated by n8n\",\n  \"head\": \"{{ $('Modify YAML').first().json.branch_name }}\",\n  \"base\": \"main\"\n}",
+        "options": {}
+      },
+      "id": "gitea-create-pr",
+      "name": "Create PR",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2010, 100],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gitea-token",
+          "name": "Gitea Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'https://api.getport.io/v1/actions/runs/' + $('Modify YAML').first().json.run_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"status\": \"SUCCESS\",\n  \"message\": {\n    \"run_status\": \"PR created for {{ $('Modify YAML').first().json.service_name }}. Awaiting review.\",\n    \"pr_url\": \"{{ $json.html_url }}\"\n  }\n}",
+        "options": {}
+      },
+      "id": "port-success-op",
+      "name": "Port Success (QA/OP)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2230, 100],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "port-token",
+          "name": "Port Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'https://api.getport.io/v1/actions/runs/' + $json.context.runId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"status\": \"FAILURE\",\n  \"message\": {\n    \"run_status\": \"Invalid action: {{ $json.action?.identifier }}. Expected: create_observability\"\n  }\n}",
+        "options": {}
+      },
+      "id": "port-invalid-action",
+      "name": "Port Invalid Action",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [690, 400],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "port-token",
+          "name": "Port Token"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Action": {
+      "main": [
+        [
+          {
+            "node": "Gitea Read File",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Port Invalid Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gitea Read File": {
+      "main": [
+        [
+          {
+            "node": "Modify YAML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Modify YAML": {
+      "main": [
+        [
+          {
+            "node": "Requires PR?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Requires PR?": {
+      "main": [
+        [
+          {
+            "node": "Create Branch (QA/OP)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Direct Commit (ST)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Direct Commit (ST)": {
+      "main": [
+        [
+          {
+            "node": "Port Success (ST)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Branch (QA/OP)": {
+      "main": [
+        [
+          {
+            "node": "Get Branch SHA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Branch SHA": {
+      "main": [
+        [
+          {
+            "node": "Commit to Branch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Commit to Branch": {
+      "main": [
+        [
+          {
+            "node": "Create PR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create PR": {
+      "main": [
+        [
+          {
+            "node": "Port Success (QA/OP)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "pinData": {}
+}

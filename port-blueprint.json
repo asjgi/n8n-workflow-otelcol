@@ -13,12 +13,25 @@
       "namespace": {
         "title": "Kubernetes Namespace",
         "type": "string",
-        "enum": ["production", "staging", "development"],
-        "default": "development",
-        "description": "Kubernetes namespace where your service is deployed"
+        "enum": ["st", "qa", "op"],
+        "default": "st",
+        "description": "Kubernetes namespace where your service is deployed (st: staging, qa: quality assurance, op: operations/production)"
+      },
+      "cluster": {
+        "title": "Cluster Environment",
+        "type": "string",
+        "enum": ["st", "qa", "op"],
+        "description": "The target cluster environment: st (staging), qa (quality assurance), op (operations/production)"
+      },
+      "pipeline_type": {
+        "title": "Pipeline Type",
+        "type": "string",
+        "enum": ["standard", "standard-metadata", "cloudlet", "apigw", "connect", "t20"],
+        "default": "standard",
+        "description": "The OTEL pipeline type for log processing"
       }
     },
-    "required": ["service_name", "namespace"]
+    "required": ["service_name", "namespace", "cluster"]
   },
   "calculationProperties": {},
   "relations": {
