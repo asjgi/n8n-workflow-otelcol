@@ -48,11 +48,11 @@ flowchart TB
 
 ## 환경별 배포 전략
 
-| 환경 | 클러스터 | 배포 방식 |
-|------|---------|----------|
-| ST (Staging) | `st`, `*-st` | Direct Commit → 자동 배포 |
-| QA | `qa`, `*-qa` | PR 생성 → 리뷰 후 Merge |
-| OP (Production) | `op`, `*-op` | PR 생성 → 리뷰 후 Merge |
+| Phase | 배포 방식 | 설명 |
+|-------|----------|------|
+| ST (Staging) | Direct Commit | main 브랜치에 직접 커밋 → 자동 배포 |
+| QA | PR 생성 | 피처 브랜치 → 리뷰 후 Merge |
+| OP (Production) | PR 생성 | 피처 브랜치 → 리뷰 후 Merge |
 
 ## 구성요소
 
@@ -60,12 +60,21 @@ flowchart TB
 
 개발팀이 셀프서비스로 로그 수집 요청:
 
-| 필드 | 설명 | 예시 |
-|------|------|------|
-| `service_name` | 서비스명 (K8s deployment 이름) | `user-api` |
-| `namespace` | K8s 네임스페이스 | `st`, `qa`, `op` |
-| `cluster` | 클러스터 환경 | `st`, `qa`, `op` |
-| `pipeline_type` | OTEL 파이프라인 타입 | `standard`, `cloudlet`, `apigw` 등 |
+| 필드 | 타입 | 설명 | 예시 |
+|------|------|------|------|
+| `service_name` | pattern `^[a-z0-9-]+$` | 서비스명 (K8s deployment 이름) | `user-api` |
+| `namespace` | pattern `^ns-[a-z0-9-]+$` | K8s 네임스페이스 | `ns-auth`, `ns-home` |
+| `region` | enum | 리전 | `kic`, `aic`, `eic` |
+| `phase` | enum | 배포 단계 | `st`, `qa`, `op` |
+| `pipeline_type` | enum | OTEL 파이프라인 타입 | `standard`, `cloudlet` 등 |
+
+**Region 설명:**
+- `kic`: Korea (한국)
+- `aic`: America (미주)
+- `eic`: Europe (유럽)
+
+**Pipeline Type 옵션:**
+- `standard`, `standard-metadata`, `cloudlet`, `apigw`, `connect`, `t20`
 
 ### 2. n8n 워크플로우 (`configs/n8n-workflow-gitea-simple.json`)
 
@@ -87,7 +96,7 @@ Webhook Trigger → Validate Action → Gitea Read File → Modify YAML → Requ
 |------|------|
 | **Webhook Trigger** | Port IDP webhook 수신 (`POST /webhook/otel-pipeline-port`) |
 | **Validate Action** | `action.identifier === "create_observability"` 검증 |
-| **Gitea Read File** | `{cluster}/agent-node-log.yaml` 파일 읽기 |
+| **Gitea Read File** | `{region}-{phase}/agent-node-log.yaml` 파일 읽기 |
 | **Modify YAML** | `filelog/{pipeline_type}` 섹션에 로그 경로 추가 |
 | **Requires PR?** | QA/OP면 PR 생성, ST면 직접 커밋 |
 | **Port Success** | Port에 성공 상태 콜백 |
@@ -102,9 +111,10 @@ Webhook Trigger → Validate Action → Gitea Read File → Modify YAML → Requ
   "context": { "runId": "run-123" },
   "payload": {
     "properties": {
-      "service_name": "my-service",
-      "namespace": "st",
-      "cluster": "cluster-st",
+      "service_name": "user-api",
+      "namespace": "ns-auth",
+      "region": "kic",
+      "phase": "st",
       "pipeline_type": "standard"
     }
   },
@@ -119,7 +129,8 @@ Webhook Trigger → Validate Action → Gitea Read File → Modify YAML → Requ
 
 **3. Gitea Read File**
 - Gitea API로 현재 OTEL 설정 파일 읽기
-- API: `GET /repos/cluster/otel-settings/contents/{cluster}/agent-node-log.yaml`
+- API: `GET /repos/cluster/otel-settings/contents/{region}-{phase}/agent-node-log.yaml`
+- 예: `kic-st/agent-node-log.yaml`
 
 **4. Modify YAML**
 - YAML에 새 서비스 로그 경로 추가
@@ -127,7 +138,7 @@ Webhook Trigger → Validate Action → Gitea Read File → Modify YAML → Requ
 - 로그 경로 형식: `/var/log/pods/{namespace}_{service_name}*/{service_name}*/*.log`
 
 **5. Requires PR?**
-- 환경별 분기 처리
+- Phase별 분기 처리
 - ST: Direct Commit → main 브랜치에 직접 커밋
 - QA/OP: PR 생성 → 피처 브랜치 생성 후 PR
 
@@ -140,11 +151,23 @@ Webhook Trigger → Validate Action → Gitea Read File → Modify YAML → Requ
 
 ```
 otel-settings/
-├── st/
+├── kic-st/
 │   └── agent-node-log.yaml
-├── qa/
+├── kic-qa/
 │   └── agent-node-log.yaml
-└── op/
+├── kic-op/
+│   └── agent-node-log.yaml
+├── aic-st/
+│   └── agent-node-log.yaml
+├── aic-qa/
+│   └── agent-node-log.yaml
+├── aic-op/
+│   └── agent-node-log.yaml
+├── eic-st/
+│   └── agent-node-log.yaml
+├── eic-qa/
+│   └── agent-node-log.yaml
+└── eic-op/
     └── agent-node-log.yaml
 ```
 
@@ -170,22 +193,23 @@ Port에서 "Add Service to Log Collection" 액션 실행:
 
 ```json
 {
-  "service_name": "my-service",
-  "namespace": "ns-myapp",
-  "cluster": "st",
+  "service_name": "user-api",
+  "namespace": "ns-auth",
+  "region": "kic",
+  "phase": "st",
   "pipeline_type": "standard"
 }
 ```
 
 ## 자동 생성되는 구성
 
-요청 시 `agent-node-log.yaml`에 다음 경로가 추가됩니다:
+요청 시 `{region}-{phase}/agent-node-log.yaml`에 다음 경로가 추가됩니다:
 
 ```yaml
 receivers:
   filelog/standard:
     include:
-      - /var/log/pods/ns-myapp_my-service*/my-service*/*.log  # 자동 추가
+      - /var/log/pods/ns-auth_user-api*/user-api*/*.log  # 자동 추가
 ```
 
 ## 프로젝트 구조
