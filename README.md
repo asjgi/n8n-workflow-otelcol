@@ -180,12 +180,14 @@ otel-settings/
    - **Gitea Token**: HTTP Header Auth (`Authorization: token {YOUR_TOKEN}`)
    - **Port Token**: HTTP Header Auth (`Authorization: Bearer {YOUR_TOKEN}`)
 
-### 2. Port Blueprint 생성
+### 2. Port Blueprint & Action 생성
 
 1. Port에서 `port-blueprint.json`으로 Blueprint 생성
-2. Action 생성:
-   - **Identifier**: `create_observability`
-   - **Webhook URL**: `https://your-n8n.com/webhook/otel-pipeline-port`
+2. Port에서 `port-action.json`으로 Action 생성
+3. Action의 webhook URL을 실제 n8n URL로 수정:
+   ```json
+   "url": "https://your-n8n.com/webhook/otel-pipeline-port"
+   ```
 
 ### 3. 테스트
 
@@ -221,6 +223,7 @@ receivers:
 │   ├── example-otel-config.yaml        # OTEL 설정 예시
 │   └── *.yaml                          # 기타 설정 참조
 ├── port-blueprint.json                 # Port Blueprint 정의
+├── port-action.json                    # Port Action 정의
 ├── demo/                               # 데모 스크립트
 ├── scripts/                            # 유틸리티 스크립트
 └── README.md
