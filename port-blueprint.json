@@ -13,9 +13,8 @@
       "namespace": {
         "title": "Kubernetes Namespace",
         "type": "string",
-        "enum": ["st", "qa", "op"],
-        "default": "st",
-        "description": "Kubernetes namespace where your service is deployed (st: staging, qa: quality assurance, op: operations/production)"
+        "pattern": "^ns-[a-z0-9-]+$",
+        "description": "Kubernetes namespace where your service is deployed (e.g., ns-auth, ns-connect, ns-home)"
       },
       "cluster": {
         "title": "Cluster Environment",
