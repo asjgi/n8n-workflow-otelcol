@@ -6,61 +6,48 @@
   "trigger": {
     "type": "self-service",
     "operation": "CREATE",
-    "blueprintIdentifier": "observability-request"
+    "blueprintIdentifier": "observability-request",
+    "userInputs": {
+      "properties": {
+        "service_name": {
+          "type": "string",
+          "title": "Service Name",
+          "pattern": "^[a-z0-9-]+$",
+          "description": "The name of your service (must match your Kubernetes deployment name)"
+        },
+        "namespace": {
+          "type": "string",
+          "title": "Kubernetes Namespace",
+          "pattern": "^ns-[a-z0-9-]+$",
+          "description": "Kubernetes namespace where your service is deployed (e.g., ns-auth, ns-connect, ns-home)"
+        },
+        "region": {
+          "type": "string",
+          "title": "Region",
+          "enum": ["kic", "aic", "eic"],
+          "description": "Target region: kic (Korea), aic (America), eic (Europe)"
+        },
+        "phase": {
+          "type": "string",
+          "title": "Phase",
+          "enum": ["st", "qa", "op"],
+          "description": "Deployment phase: st (staging), qa (quality assurance), op (production)"
+        },
+        "pipeline_type": {
+          "type": "string",
+          "title": "Pipeline Type",
+          "enum": ["standard", "standard-metadata", "cloudlet", "apigw", "connect", "t20"],
+          "default": "standard",
+          "description": "The OTEL pipeline type for log processing"
+        }
+      },
+      "required": ["service_name", "namespace", "region", "phase"]
+    }
   },
   "invocationMethod": {
     "type": "WEBHOOK",
-    "url": "https://your-n8n.com/webhook/otel-pipeline-port",
-    "agent": false,
-    "synchronized": false,
+    "url": "http://n8n.lgthinq.com.local/webhook/otel-pipeline-port",
     "method": "POST"
   },
-  "requiredApproval": false,
-  "userInputs": {
-    "properties": {
-      "service_name": {
-        "title": "Service Name",
-        "type": "string",
-        "pattern": "^[a-z0-9-]+$",
-        "description": "The name of your service (must match your Kubernetes deployment name)"
-      },
-      "namespace": {
-        "title": "Kubernetes Namespace",
-        "type": "string",
-        "pattern": "^ns-[a-z0-9-]+$",
-        "description": "Kubernetes namespace where your service is deployed (e.g., ns-auth, ns-connect, ns-home)"
-      },
-      "region": {
-        "title": "Region",
-        "type": "string",
-        "enum": ["kic", "aic", "eic"],
-        "enumColors": {
-          "kic": "blue",
-          "aic": "green",
-          "eic": "orange"
-        },
-        "description": "Target region: kic (Korea), aic (America), eic (Europe)"
-      },
-      "phase": {
-        "title": "Phase",
-        "type": "string",
-        "enum": ["st", "qa", "op"],
-        "enumColors": {
-          "st": "turquoise",
-          "qa": "yellow",
-          "op": "red"
-        },
-        "description": "Deployment phase: st (staging), qa (quality assurance), op (production)"
-      },
-      "pipeline_type": {
-        "title": "Pipeline Type",
-        "type": "string",
-        "enum": ["standard", "standard-metadata", "cloudlet", "apigw", "connect", "t20"],
-        "default": "standard",
-        "description": "The OTEL pipeline type for log processing"
-      }
-    },
-    "required": ["service_name", "namespace", "region", "phase"],
-    "order": ["service_name", "namespace", "region", "phase", "pipeline_type"]
-  }
+  "requiredApproval": false
 }
